@@ -21,7 +21,7 @@
                 v-model="ticker"
                 @keydown.enter="add"
                 @input="inputChange"
-                value="sel"
+                value="selectedTicker"
                 type="text"
                 name="wallet"
                 id="wallet"
@@ -76,13 +76,23 @@
       </section>
       <template v-if="tickers.length">
         <hr class="w-full border-t border-gray-600 my-4" />
+        <div>
+          <button class="my-4 mx-2 inline-flex items-center py-2 px-4 border border-transparent shadow-sm text-sm leading-4 font-medium rounded-full text-white bg-gray-600 hover:bg-gray-700 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+          v-if="page > 1"
+          @click="page=page - 1">Назад</button> 
+          <button class="my-4 mx-2 inline-flex items-center py-2 px-4 border border-transparent shadow-sm text-sm leading-4 font-medium rounded-full text-white bg-gray-600 hover:bg-gray-700 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+          v-if="hasNextPage"
+          @click="page=page + 1">Вперёд</button>
+          <div>Фильтр: <input v-model="filter" type="text"> </div>
+        </div>
+        <hr class="w-full border-t border-gray-600 my-4" />
         <dl class="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-3">
           <div 
-            v-for="t of tickers"
+            v-for="t of paginatedTickers"
             :key="t.name"
             @click="select(t)"
             :class="{
-              'border-4' : sel == t
+              'border-4' : selectedTicker == t
             }"
             class="bg-white overflow-hidden shadow rounded-lg border-purple-800 border-solid cursor-pointer"
           >
@@ -116,20 +126,20 @@
         </dl>
         <hr class="w-full border-t border-gray-600 my-4" />
       </template>
-      <section v-if="sel"  class="relative">
+      <section v-if="selectedTicker"  class="relative">
         <h3 class="text-lg leading-6 font-medium text-gray-900 my-8">
-          {{ sel.name }} - USD
+          {{ selectedTicker.name }} - USD
         </h3>
         <div class="flex items-end border-gray-600 border-b border-l h-64">
           <div
-            v-for="(bar, idx) in normalizeGraph()"
+            v-for="(bar, idx) in normalizedGraph"
             :key="idx"
             :style="{ height: `${bar}%` }"
             class="bg-purple-800 border w-10"
           ></div>
         </div>
         <button
-          @click="sel=null"
+          @click="selectedTicker=null"
           type="button"
           class="absolute top-0 right-0"
         >
@@ -162,22 +172,54 @@
 
 <script>
 
+  // [X] 6. Наличие в состоянии ЗАВИСИМЫХ ДАННЫХ / Критичность: 5+
+  // [] 5. Обработка ошибок API / Критичность: 5
+  // [] 4. Запросы напрямую внутри компонента / Критичность: 5
+  // [] 2. При удалении остаётся подписка на загрузку тикера(в консоли вылазят ошибки) / Критичность: 5
+  // [] 3. Количество запросов / Критичность: 4
+  // [X] 8. При удалении тикера не изменяется localStorage / Критичность: 4
+  // [X] 1. Одинаковый код в watch / Критичность: 3
+  // [] 9. localStorage и анонимные вкладки / Критичность: 3
+  // [] 7. График ужасно выглядит если будет много цен / Критичность: 2
+  // [] 10. Магические строки и числа(URL, 5000 милисекунд задержки, ключ localStorage., количество на странице) / Критичность: 1
+
+  // Параллельно
+  // [X] График сломан если везде одинаковые значения
+  // [X] При удалении тикера остаётся выбор
+
 export default {
+  
   name: 'App',
   data() {
     return {
-      loader: 'flex',
       ticker: '',
+      filter: '',
+
       tickers: [],
-      sel: null,
+      selectedTicker: null,
+
       graph: [],
-      hint: [],
-      seen: false
+
+      page: 1,
+
+      seen: false,
+      loader: 'flex',
     }
   },
 
   created() {
+    const windowData = Object.fromEntries(new URL(window.location).searchParams.entries());
+    
+    if(windowData.filter) {
+      this.filter = windowData.filter;
+    }
+
+    if (windowData.page) {
+      this.page = windowData.page;
+    }
+
     const tickersData = localStorage.getItem('cryptonomicon-list');
+
     if (tickersData) {
       this.tickers = JSON.parse(tickersData);
       this.tickers.forEach(ticker => {
@@ -191,15 +233,65 @@ export default {
     // }, 2000)
   
   },
+  // vue кэширует данные в computed Computed - никогда не может принимать аргумент, нужно вызывать без скобочек, к примеру filteredTickers
+  computed: {
+    // 1 - 0, 5
+    // 2 - 6, 11
+    //(6 * (page - 1), 6 * page -1)
+    startIndex() {
+      return (this.page - 1) * 6;
+    },
+
+    endIndex() {
+      return this.page * 6;
+    },
+
+    filteredTickers() {
+      return this.tickers.filter(ticker => 
+        ticker.name.includes(this.filter)
+      );
+    },
+
+    paginatedTickers() {
+      return this.filteredTickers.slice(this.startIndex, this.endIndex);
+    },
+
+    hasNextPage() {
+      return this.filteredTickers.length > this.endIndex;
+    },
+
+    // нормализация графиков
+    normalizedGraph() {
+      const maxValue = Math.max(...this.graph);
+      const minValue = Math.min(...this.graph);
+
+      if (maxValue === minValue) {
+        return this.graph.map(() => 50)
+      }
+
+      return this.graph.map(
+        price => 5 + ((price - minValue) * 95) / (maxValue - minValue)
+      )
+    },
+
+    pageStateOptions() {
+      return {
+        filter: this.filter,
+        page: this.page
+      }
+    },
+  },
 
   methods: {
+
+    // обновление тикеров
     subscribeToUpdates(tickerName) {
       setInterval(async() => {
-        const f = await fetch(`https://min-api.cryptocompare.com/data/price?fsym=${tickerName}&tsyms=USD&api_key=a687a10da0aee8dfa8ae7d240baf7509a90585b1413d7f992c338fdcbe5a6422`);
+        const f = await fetch(`https://min-api.cryptocompare.com/data/price?fsym=${tickerName}&tsyms=USD&api_key=c6d5eb31b3e2656ec2d578377b03feabf1fb47b750d5022118d6143bc96d0e11`);
         const data = await f.json();
     
-        this.tickers.find(t => t.name === tickerName).price = data.USD > 1 ? data.USD.toFixed(2) : data.USD.toPrecision(2);
-        if(this.sel?.name === tickerName) {
+        // this.tickers.find(t => t.name === tickerName).price = data.USD > 1 ? data.USD.toFixed(2) : data.USD.toPrecision(2);
+        if(this.selectedTicker?.name === tickerName) {
           this.graph.push(data.USD);
         }
       }
@@ -208,83 +300,87 @@ export default {
       this.ticker = "";
     },
 
+    // добавление тикеров
     add() {
       const currentTicker = { 
         name: this.ticker, 
         price: '-'
       };
 
-      this.tickers.push(currentTicker);
+      this.tickers = [...this.tickers, currentTicker];
+      this.filter = '';
 
-      localStorage.setItem('cryptonomicon-list', JSON.stringify(this.tickers));
       this.subscribeToUpdates(currentTicker.name);
       
     },
+    
+    // выбор тикера
+    select(ticker) {
+      this.selectedTicker = ticker;
+      this.graph = [];
+    },
+
+    // удаление тикера
     handleDelete(tickerToRemove) {
       this.tickers = this.tickers.filter(t => t != tickerToRemove);
+      if (this.selectedTicker === tickerToRemove) {
+        this.selectedTicker = null;
+        console.log(this.selectedTicker)
+      }
     },
+
+    // событие при добавлении тикера в поле ввода
     inputChange(e) {
       e.preventDefault();
      
       this.tickers.find((t) => {
         if (e.target.value == t.name) {
           this.seen = true;
-          this.hint.push(e.target.value)
         }
         if (e.target.value == '') {
           this.seen = false;
         }})
-      // setInterval(async() => {
-      //       const many = await fetch(`https://min-api.cryptocompare.com/data/all/coinlist?summary=true`);
-      //       const data = await many.json();
-      //       // console.log(data.Data)
-      //       let symb = data.Data
-      //       this.tickers.find(t => t.name === currentTicker.name)
-      //       for (let key in symb) {
-              
-      //         if (e.target.value == currentTicker.name) {
-      //           this.seen = true;
-      //           this.hint.push(key)
-      //         }
-      //         if (e.target.value == '') {
-      //           this.seen = false;
-                
-      //         }
-      //         // if (t.name == key) {
-      //         //   this.hint.push(key)
-      //         //   console.log("Ключ = " + key);
-      //         //   console.log("Значение = " + symb[key]);
-      //         // }
-      //       } 
-      //     },5000 )
-      //     this.ticker = ""
-      // // });
-      // console.log(this.hint)
     },
-   
+  
+  },
 
-    normalizeGraph() {
-      const maxValue = Math.max(...this.graph);
-      const minValue = Math.min(...this.graph);
-      return this.graph.map(
-        price => 5 + ((price - minValue) * 95) / (maxValue - minValue)
-      )
-    },
-    select(ticker) {
-      this.sel = ticker;
+  // watch - это если логика отвечает на вопрос когда мы то-то далаем
+  watch: {
+    // когда меняется выбранный тикер, сбросить график
+    selectedTicker() {
       this.graph = [];
     },
-  },
-  // mounted: function () {
-  // this.$nextTick(function () {
-  //   setTimeout(() => {
-  //     this.loader = "hidden"
-  //     }, 2000)
+
+    // когда меняются тикеры сохранить тикеры в локал сторидж
+    tickers(newValue, oldValue){
+      // Почему не сработал watch при добавлении?
+      console.log(newValue.length, oldValue.length)
+      localStorage.setItem('cryptonomicon-list', JSON.stringify(this.tickers));
+    },
+
+    // когда на странице ничего нет сбросить до первой страницы
+    paginatedTickers() {
+      if (this.paginatedTickers.length === 0 && this.page > 1) {
+        this.page -= 1;
+      }
+    },
+
+    // когда меняется фильтр сбросить страницу на первую
+    filter() {
+      this.page = 1;
     
-  // //   // Код, который будет запущен только после
-  // //   // отображения всех представлений
-  // }),
+      // const currentURL = new URL(window.location);
+    },
+
+    // когда меняются опции фильтра - или page или filter
+    pageStateOptions(value) {
+      window.history.pushState(
+        null, 
+        document.title, 
+        `${window.location.pathname}?filter=${value.filter}&page=${value.page}`);
+    }
+  }
  
-}
+} 
 </script>
 
